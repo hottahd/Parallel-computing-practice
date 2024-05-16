@@ -21,6 +21,9 @@ _header: "MPIを用いた並列数値シミュレーション"
 1. MPIとは
 1. 環境設定
 1. Hello World
+1. 1対1通信
+1. 集団通信
+1. 実際の例(移流方程式)
 
 # MPIとは
 
@@ -98,3 +101,83 @@ mpiexec -n np ./a.out
 mpiexec -n 8 ./a.out
 ```
 などとする。
+
+# 1対1通信
+
+MPIでは、プロセスごとに違うメモリ空間を持っており、明示的にプロセス間のデータのやり取りをする必要がある。ここではプロセスごとの1対1通信を解説する。通信にはブロッキング通信/ノンブロッキング通信がある。
+### ブロッキング
+送受信側で送信/受信バッファを解放しても良いタイミング(一般には送受信が完了したタイミング)になるまで送信関数・受信関数から復帰しない。処理の順番を間違えるとデッドロック(お互いに情報を待つ)が起こる可能性がある。今回はこちらは説明しない
+
+### ノンブロッキング
+送信処理・受信処理を開始する宣言のみで、送信関数・受信関数から復帰。データの同期は`mpi_wait`関数などでユーザーが保証する必要がある。今回はこちらを説明する。
+
+# ノンブロッキング 1対1通信 (1/n)
+
+`rank = 0`から`rank = 1`へノンブロッキングに変数`a`を`mpi_isend/mpi_irecv`関数を用いて送受信するプログラムを`src/01_1on1/main.F90`に配置した。
+
+# `mpi_isend`関数
+
+自分の`rank`から指定した`rank`へデータを送信する関数。書式は以下
+```fortran
+mpi_isend(buff,count,datatype,dest,tag,comm,mreq,merr)
+```
+
+|引数|型|入手力|意味|
+|---    |---      |---|---|
+|`buff`    |任意      |入力|送信する変数、配列も可
+|`count`   |`integer`|入力|要素の個数。配列なら要素数。スカラーならば1。|
+|`datatype`|`integer`|入力|送信するデータの型。MPIによる定義(後述)|
+|`dest`    |`integer`|入力|送信先の`rank`|
+|`tag`     |`integer`|入力|メッセージタグ。`mpi_irecv`で同じものを使う
+|`comm`    |`integer`|入力|コミュニケータ。`mpi_comm_world`
+|`mreq`    |`integer`|出力|通信識別子。サイズは`mpi_isend`呼び出す回数
+|`merr`    |`integer`|出力|エラーコード
+
+# `mpi_irecv`関数
+
+自分の`rank`から指定した`rank`へデータを受信する関数。書式は以下
+```fortran
+mpi_isend(buff,count,datatype,orgn,tag,comm,mreq,merr)
+```
+
+|引数|型|入手力|意味|
+|---    |---      |---|---|
+|`buff`    |任意      |入力|送信する変数、配列も可
+|`count`   |`integer`|入力|要素の個数。配列なら要素数。スカラーならば1。|
+|`datatype`|`integer`|入力|送信するデータの型。MPIによる定義(後述)|
+|`orgn`    |`integer`|入力|送信元の`rank`|
+|`tag`     |`integer`|入力|メッセージタグ。`mpi_irecv`で同じものを使う
+|`comm`    |`integer`|入力|コミュニケータ。`mpi_comm_world`
+|`mreq`    |`integer`|出力|通信識別子。サイズは`mpi_isend`呼び出す回数
+|`merr`    |`integer`|出力|エラーコード
+
+# `mpi_wait`関数
+
+`mpi_isend/mpi_irecv`を実行した後は、``通信が終わるまで待機する。
+```fortran
+call mpi_wait(mreq, mstatus,merr)
+```
+|引数|型|入手力|意味|
+|---    |---      |---|---|
+|`mreq`    |`integer`|入出力|通信識別子。サイズは`mpi_isend`呼び出す回数
+|`mstatus` |`integer`|出力  |状況オブジェクト配列。サイズは`mpi_status_size`
+|`merr`    |`integer`|出力  |エラーコード
+
+複数回`mpi_isend/mpi_irecv`を行った場合は`mpi_waitall`でまとめて待機させることもできる(省略)。
+# MPIの`datatype`
+MPI関数の定義する型は多岐にわたるが、よく使うものだけここに示す
+
+|MPI `datatype`        | fortran `type`    |意味|
+|---                   |---                |---
+|`mpi_integer`         | `integer`         |整数
+|`mpi_real`            | `real`            |単精度実数
+|`mpi_double_precision`| `double precision`|倍精度実数
+|`mpi_complex`         | `complex`         |(通常は)単精度複素数
+|`mpi_logical`         | `logical`         |ブール値。`true`か`false`
+
+
+ユーザーが型を定義することも可能。`mpi_type_create_subarray`など。メモリ上不連続なデータをひとまとめにして送りたい場合に有用(省略)
+
+# 集団通信
+
+多くのプロセスと同時に関連して通信するのが集団通信。多数回1対1通信をしても実現できるが、MPIの集団通信は最適化してあるので、多数のプロセスが関わる場合はこちらを使うようにする。
