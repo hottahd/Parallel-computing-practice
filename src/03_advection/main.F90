@@ -26,7 +26,7 @@ program advection
     double precision :: xmaxl, xminl ! 各プロセスのx座標の最大値、最小値
     double precision :: xwidthl ! 各プロセスのx座標の幅
 
-    ! data directory作成
+    ! data directory作成のlogical (true or false)
     logical :: exist
 
     allocate(mstatus(mpi_status_size))
@@ -37,7 +37,9 @@ program advection
 
     write(cno, ('(I4.4)')) myrank
 
+    ! data directory作成 (myrank == 0でのみ実行)
     if (myrank == 0) then
+        ! パラメタを書き込むdata/params.txtが存在するか確認
         inquire(file = 'data/params.txt', exist = exist)
         if (.not. exist) then
             call system('mkdir data')
@@ -45,18 +47,19 @@ program advection
             call system('mkdir data/qq')
         endif
 
+        ! パラメタ書き込み
         open(10,file='data/params.txt',form='formatted')
         write(10,*) ix
         write(10,*) margin
         write(10,*) npe
         close(10)
-
     endif
 
     ! myrank =0 でディレクトリ作成が終わるまで待つ
     call mpi_barrier(mpi_comm_world, merr)
     
-    ! 座標設定
+    ! 座標設定　各プロセスで独自に設定
+    ! myrank == 0で設定 -> 全体に配布 -> それぞれの部分を取るという方法も可
     xwidthl = (xmax - xmin) / dble(npe)
     xminl = xmin + dble(myrank) * xwidthl
     xmaxl = xminl + xwidthl
@@ -72,20 +75,20 @@ program advection
     write(10) x
     close(10)
 
-    ! 初期条件
-    dw = 0.05d0
+    ! 初期条件 (今回は適当なガウス関数にした)
+    dw = 0.1d0
     do i = 1,ixg
         qq(i) = exp(-((x(i)-0.5d0*(xmax + xmin))/dw)**2)
-        !qq(i) = dble(myrank)
     enddo
 
     ! 移流速度
     cvel = 1.d0
-
+    
     !
     !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    nd = 0
-    n = 0
+    ! カウンター初期化
+    nd = 0 ! アウトプット回数
+    n = 0 ! 時間ステップ数
 
     ! 初期条件書き出し(あとでも同じことするのでサブルーチンにした方が良い)
     write(cnd, ('(I4.4)')) nd   
@@ -102,14 +105,18 @@ program advection
             dtmin = min(dtmin, cfl*dx/abs(cvel))
         enddo
 
+        ! 全プロセスでdtを求めて最小のdtを選ぶ
         call mpi_allreduce(dtmin, dt, 1, mpi_double_precision, mpi_min, mpi_comm_world, merr)
         
+        ! Lax-Friedrichを用いた時間発展
         qqn = 0.d0
         do i = 1+margin,ixg-margin
             qqn(i) = 0.5d0*(qq(i+1) + qq(i-1)) - cvel*dt*(qq(i+1) - qq(i-1))/2.d0/dx
         enddo
-        ! 境界条件
+
+        ! 境界条件(周期境界条件なので通信のみ)
         ! mpi_sendrecvでやった方が簡単だが、ブロッキング通信は避ける
+        ! myrank より 一個上のプロセスとのやり取り
         tag_dw2up = 0
         tag_up2dw = 1
         if(myrank == npe -1) then
@@ -122,6 +129,7 @@ program advection
         call mpi_isend(buffsnd_up,margin, mpi_double_precision, dest, tag_dw2up, mpi_comm_world, mreqsnd_dw2up, merr)
         call mpi_irecv(buffrcv_up,margin, mpi_double_precision, dest, tag_up2dw, mpi_comm_world, mreqrcv_up2dw, merr)
 
+        ! myrank より 一個下のプロセスとのやり取り
         if(myrank == 0) then
             dest = npe - 1
         else
@@ -131,6 +139,7 @@ program advection
         call mpi_isend(buffsnd_dw,margin, mpi_double_precision, dest, tag_up2dw, mpi_comm_world, mreqsnd_up2dw, merr)
         call mpi_irecv(buffrcv_dw,margin, mpi_double_precision, dest, tag_dw2up, mpi_comm_world, mreqrcv_dw2up, merr)
 
+        ! 同期の待機。これが終わるまでbuffsnd_**は見にいってはいけない
         call mpi_wait(mreqsnd_dw2up, mstatus, merr)
         call mpi_wait(mreqsnd_up2dw, mstatus, merr)
         call mpi_wait(mreqrcv_dw2up, mstatus, merr)
