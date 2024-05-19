@@ -31,10 +31,11 @@ Message Passing Interface (MPI) とは、並列コンピューティングを利
 
 今回は、MPIの基礎を(fortran)で学ぶことにより、並列実行可能なコードを実装できるようになることを目指す。
 
-## 前提知識
+## 前提(知識)
 - UNIX・Linux
 - エディタ(Emacs・vi・VS code...)
 - fortranの基礎構文
+- fortranとMPIを設定ずみの環境(`solar0*`が使えれば問題ない)
 - 移流方程式の解法(簡単に復習する)
 
 # 環境設定など
@@ -45,17 +46,16 @@ CIDASシステムの`solar0*`で実行することを想定しているために
 
 ## ローカルマシンに環境構築する場合
 
-### Mac
-`Homebrew`を用いる
+### Mac (Homebrew)
 ```SHELL
 /usr/bin/ruby -e "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/master/install)" # Homebrew
 brew install gcc # gfortran
 brew install openmpi # OpenMPI
 ```
 
-### Linux (Ubuntu)
-管理者権限が必要
+### Linux (Ubuntu)/ WSLを用いれば、Windowsでも多分
 ```SHELL
+sudo apt-get update
 sudo apt-get install gfortran # gfortran
 sudo apt-get install openmpi-doc openmpi-bin libopenmpi-dev # OpenMPI
 ```
@@ -181,3 +181,69 @@ MPI関数の定義する型は多岐にわたるが、よく使うものだけ�
 # 集団通信
 
 多くのプロセスと同時に関連して通信するのが集団通信。多数回1対1通信をしても実現できるが、MPIの集団通信は最適化してあるので、多数のプロセスが関わる場合はこちらを使うようにする。
+
+- `mpi_bcast`関数を用いて`rank = 0`の`a`というデータを全プロセスに送信するプログラムを`src/02_collective/main01.F90`
+- `mpi_allreduce`関数を用いて各プロセスの`rank`を合計するプログラムを`scr/02_collective/main02.F90`
+
+においた。
+
+# `mpi_bcast`関数
+
+あるプロセスにあるデータを(コミュニケータの)全プロセスに配布する関数。書式は以下
+
+```fortran
+call mpi_bcast(buff,count,datatype,orgn,comm,merr)
+```
+|引数|型|入手力|意味|
+|---    |---      |---|---|
+|`buff`    |任意      |入力|送信する変数、配列も可
+|`count`   |`integer`|入力|要素の個数。配列なら要素数。スカラーならば1。|
+|`datatype`|`integer`|入力|送信するデータの型。MPIによる定義(後述)|
+|`orgn`    |`integer`|入力|送信元の`rank`|
+|`comm`    |`integer`|入力|コミュニケータ。`mpi_comm_world`
+|`merr`    |`integer`|出力|エラーコード
+
+# `mpi_allreduce`関数
+
+(コミュニケータの)全プロセスからデータを集め、何らかの操作(合計、最大、最小)を実施する関数。CFL条件で求めた`dt`の最小の値を計算する際などに使う。
+
+```fortran
+call mpi_allreduce(buff_send,buff_recv,count,datatype,op,comm,merr)
+```
+|引数|型|入手力|意味|
+|---    |---      |---|---|
+|`buff_send`|任意      |入力|送信する変数、配列も可
+|`buff_recv`|任意      |出力|受信する変数、配列も可
+|`count`    |`integer`|入力|要素の個数。配列なら要素数。スカラーならば1。|
+|`datatype` |`integer`|入力|送信するデータの型。MPIによる定義(後述)|
+|`op`       |`integer`|入力|演算の種類|
+|`comm`     |`integer`|入力|コミュニケータ。`mpi_comm_world`
+|`merr`     |`integer`|出力|エラーコード
+
+# `mpi_allreduce`の`op`
+
+- `mpi_max`: 最大
+- `mpi_min`: 最小
+- `mpi_sum`: 総和
+- `mpi_prod`: 積
+- `mpi_land`: 論理AND
+
+# 移流方程式の数値解法
+
+$$
+\frac{\partial Q}{\partial t} = -c\frac{\partial Q}{\partial x}
+$$
+という移流方程式を解くことを考える。移流方程式の解法はそれだけで研究対象クラスであるが、ここではLax-Friedrich法を用いる。
+この手法では、方程式を以下のように離散化する
+
+$$
+Q^{n+1}_i = \frac{Q^n_{i+1} + Q^n_{i-1} }{2}  - \frac{c\Delta t}{2\Delta x}\left(Q^n_{i+1} - Q^n_{i-1}\right)
+$$
+
+となる。これをMPIを用いた並列計算を解くことを考える。今回は周期境界条件を使う。CFL条件は
+
+$$
+\Delta t \le \frac{\Delta x}{c}
+$$
+
+となり、時間・空間一定だが、練習のために`mpi_allreduce`で求める。
